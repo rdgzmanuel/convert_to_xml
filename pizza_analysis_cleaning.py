@@ -1,5 +1,9 @@
-from typing import Dict
 import pandas as pd
+import datetime as dt
+from typing import Dict
+import numpy as np
+import random
+import re
 
 
 def create_pizza_ingredients(df_pizza_types) -> Dict:
@@ -63,9 +67,9 @@ def create_weekly_pizzas(df_orders, df_order_details, df_prices, pizza_ingredien
             day = date[:2]
             if count % 7 == 0:
                 df_weekly_pizzas[f"week {int(count / 7) + 1}"] = 0
-        while df_order_details.loc[j, "order_id"] == i:
-            pizza = df_order_details.loc[j, "pizza_id"]
-            quantity = df_order_details.loc[j, "quantity"]
+        while df_order_details.iloc[j, 1] == i and j < df_order_details.shape[0]:
+            pizza = df_order_details.iloc[j, 2]
+            quantity = int(df_order_details.iloc[j, 3])
             if pizza[-2] != "_":
                 # We check this beacuse the greek pizza can be xl or xxl.
                 pizza = pizza[:9]
@@ -112,7 +116,7 @@ def obtain_optimal(df_weekly_pizzas, pizza_ingredients, ingredients):
     """
     for index, row in df_weekly_pizzas.iterrows():
         pizza = row["pizza"]
-        quantity = row["optimal"]
+        quantity = int(row["optimal"])
         for ingredient in pizza_ingredients[pizza].split(", "):
             ingredients[ingredient] += quantity
     return ingredients
@@ -142,7 +146,97 @@ def create_csv(optimal_ingredients):
     df.to_csv("optimal_ingredients.csv")
 
 
-def elaborar_informe(dfs):
+def recognize_format_date(str_date):
+    """
+    Returns the formats in which a date is introduced,
+    0 if it is Nan or 1 is it is a string of numbers.
+    """
+    if type(str_date) == float:
+        return "0"
+    elif "." in str_date:
+        return "1"
+    else:
+        if "-" in str_date:
+            if ":" in str_date:
+                return "%d-%m-%y %H:%M:%S"
+            elif not str_date[0].isdigit():
+                return "%a %d-%b-%Y"
+            else:
+                return "%Y-%m-%d"
+        elif "," in str_date:
+            return "%A,%d %B, %Y"
+        else:
+            return "%b %d %Y"
+
+
+def clean_orders(df_orders):
+    """
+    Using the python module datetime to transform any time format
+    into a standard easier to work with. In the first loop all the values are
+    transformed except NaNs and strings of numbers, which are transformed afterwards.
+    As we don't use the time of the order, tthat column is not modified.
+    """
+    for i in range(df_orders.shape[0]):
+        date_format = recognize_format_date(df_orders.iloc[i, 1])
+        if ":" in date_format:
+            new_date = str(dt.datetime.strptime(df_orders.iloc[i, 1], date_format)).split()[0]
+            date = new_date
+            date = date[8:] + "/" + date[5:7] + "/" + date[:4]
+            df_orders.iloc[i, 1] = date
+
+        else:
+            if date_format != "0" and date_format != "1":
+                try:
+                    new_date = str(dt.datetime.strptime(f"{df_orders.iloc[i, 1]}", f"{date_format}")).split()
+                except:
+                    df_orders.iloc[i, 1] = str(df_orders.iloc[i, 1])[:4] + "0" + str(df_orders.iloc[i, 1])[4:]
+                    new_date = str(dt.datetime.strptime(f"{df_orders.iloc[i, 1]}", f"{date_format}")).split()
+                
+                date = new_date[0]
+                # We can make a little modification to have the same
+                # format as the previous dataset, so that the same functions
+                # can be applied.
+                date = date[8:] + "/" + date[5:7] + "/" + date[:4]
+                df_orders.iloc[i, 1] = date
+    
+    for j in range(5):
+        # We check five times to ensure there is no Nan left
+        for i in range(df_orders.shape[0]):
+            date_format = recognize_format_date(df_orders.iloc[i, 1])
+            if date_format == "0":
+                df_orders.iloc[i, 1] = df_orders.iloc[i - 1, 1]
+                date_format = recognize_format_date(df_orders.iloc[i - 1, 1])
+            elif date_format == "1":
+                df_orders.iloc[i, 1] = df_orders.iloc[i + 1, 1]
+                date_format = recognize_format_date(df_orders.iloc[i + 1, 1])
+    return df_orders
+
+
+def clean_order_details(pizza_ingredients, df_order_details):
+    for i in range(df_order_details.shape[0]):
+        pizza = df_order_details.iloc[i, 2]
+        if type(pizza) != float:
+            pizza = re.sub("[ -]", "_", pizza)
+            pizza = re.sub("3", "e", pizza)
+            pizza = re.sub("@", "a", pizza)
+            pizza = re.sub("0", "o", pizza)
+            df_order_details.iloc[i, 2] = pizza
+        quantity = df_order_details.iloc[i, 3]
+        if quantity in ["one", "One", "-1"] or type(quantity) == float:
+            quantity = "1"
+            df_order_details.iloc[i, 3] = quantity
+        elif quantity in ["two", "Two", "-2"]:
+            quantity = "2"
+            df_order_details.iloc[i, 3] = quantity
+    sizes = ["s", "m", "l"]
+    pizzas = list(pizza_ingredients.keys())
+    for i in range(df_order_details.shape[0]):
+        if type(df_order_details.iloc[i, 2]) == float:
+            df_order_details.iloc[i, 2] = pizzas[random.randint(0, len(pizzas) - 1)] + f"_{sizes[random.randint(0, 2)]}"
+    return df_order_details
+
+
+def create_informe(dfs):
     informe = {
         "column_name": [],
         "type": [],
@@ -156,24 +250,31 @@ def elaborar_informe(dfs):
         for i in range(df.shape[1]):
             ty = str(df.dtypes[i])            
             informe["type"].append(ty)
-        
     df = pd.DataFrame(informe)
-    df.to_csv("reporte_calidad_2015.csv")
-    return
-
+    df.to_csv("reporte_calidad_2016.csv")
 
 
 if __name__ == "__main__":
-    df_orders = pd.read_csv("orders.csv")
-    df_order_details = pd.read_csv("order_details.csv")
+    df_order_details = pd.read_csv("order_details.csv", sep = ";", encoding="latin1")
+    df_orders = pd.read_csv("orders.csv", sep=";")
     df_pizzas = pd.read_csv("pizzas.csv")
     df_pizza_types = pd.read_csv("pizza_types.csv", encoding="latin1")
-    
-    elaborar_informe([df_orders, df_order_details, df_pizzas, df_pizza_types])
+
+    # create_informe([df_orders, df_order_details, df_pizzas, df_pizza_types])
+
+    df_orders = df_orders.sort_values("order_id")
+    df_orders = df_orders.reset_index(drop=True)
+    df_orders.index = np.arange(1, len(df_orders) + 1)
+    df_order_details = df_order_details.sort_values("order_details_id")
+    df_order_details = df_order_details.reset_index(drop=True)
+    df_order_details.index = np.arange(1, len(df_order_details) + 1)
+
     pizza_ingredients = create_pizza_ingredients(df_pizza_types)
     ingredients = create_ingredients(pizza_ingredients)
 
     df_prices = obtain_prices(df_pizzas)
+    df_orders = clean_orders(df_orders)
+    df_order_details = clean_order_details(pizza_ingredients, df_order_details)
     df_weekly_pizzas = create_weekly_pizzas(df_orders, df_order_details, df_prices)
 
     optimal_ingredients = obtain_optimal(df_weekly_pizzas, pizza_ingredients, ingredients)
